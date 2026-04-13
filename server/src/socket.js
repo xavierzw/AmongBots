@@ -1,4 +1,5 @@
 const Room = require('./game/Room');
+const { MODES } = require('./config');
 
 function registerSocketHandlers(wss) {
   wss.on('connection', (ws) => {
@@ -25,6 +26,7 @@ function registerSocketHandlers(wss) {
 
       switch (type) {
         case 'match': {
+          const mode = payload.mode || MODES.FIND_AI;
           const player = {
             id: payload.id || generateId(),
             name: payload.name || `玩家${generateId().slice(-4)}`,
@@ -33,9 +35,15 @@ function registerSocketHandlers(wss) {
           };
           ws.playerId = player.id;
 
+          if (mode === MODES.BATTLE_ROYALE) {
+            // Battle royale does not use matchmaking; client should use startSoloBattleRoyale instead
+            ws.sendJSON('errorMsg', { msg: '大逃杀模式请使用专用入口开始' });
+            return;
+          }
+
           let room = null;
           for (const [, r] of Room.getAllRooms()) {
-            if (r.status === 'waiting' && r.players.length < 4) {
+            if (r.status === 'waiting' && r.players.length < r.getMaxPlayers() && r.mode === mode && !r.isPrivate) {
               room = r;
               break;
             }
@@ -44,6 +52,7 @@ function registerSocketHandlers(wss) {
           if (!room) {
             const roomId = Room.generateId();
             room = Room.getOrCreate(roomId);
+            room.setMode(mode);
           }
 
           const success = room.addPlayer(player);
@@ -55,7 +64,7 @@ function registerSocketHandlers(wss) {
           ws.roomId = room.roomId;
           broadcastRoomUpdate(room);
 
-          if (room.players.length >= 4) {
+          if (room.players.length >= room.getMaxPlayers()) {
             room.startGame();
           }
           break;
@@ -79,6 +88,32 @@ function registerSocketHandlers(wss) {
 
           ws.roomId = room.roomId;
           broadcastRoomUpdate(room);
+          break;
+        }
+
+        case 'startSoloBattleRoyale': {
+          const difficulty = payload.difficulty || 'easy';
+          const player = {
+            id: payload.id || generateId(),
+            name: payload.name || `玩家${generateId().slice(-4)}`,
+            avatar: payload.avatar || '',
+            socket: ws,
+          };
+          ws.playerId = player.id;
+
+          const roomId = `SOLO_${Date.now()}_${generateId()}`;
+          const room = Room.getOrCreate(roomId);
+          room.isPrivate = true;
+          room.setMode(MODES.BATTLE_ROYALE, difficulty);
+
+          const success = room.addPlayer(player);
+          if (!success) {
+            ws.sendJSON('errorMsg', { msg: '创建单人房间失败' });
+            return;
+          }
+
+          ws.roomId = room.roomId;
+          room.startGame();
           break;
         }
 
@@ -132,7 +167,9 @@ function registerSocketHandlers(wss) {
 function broadcastRoomUpdate(room) {
   const data = room.toClientData();
   room.players.forEach((p) => {
-    p.socket.sendJSON('roomUpdate', data);
+    if (p.socket && p.socket.readyState === 1) {
+      p.socket.sendJSON('roomUpdate', data);
+    }
   });
 }
 

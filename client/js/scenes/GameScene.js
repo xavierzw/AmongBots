@@ -13,8 +13,10 @@ class GameScene {
     this.messages = [];
     this.currentPlayerId = null;
     this.round = 1;
+    this.maxRounds = data.maxRounds || 5;
     this.deadline = 0;
     this.inputText = '';
+    this.eliminationNotice = null;
     this.init();
   }
 
@@ -29,7 +31,15 @@ class GameScene {
       { event: 'roundEnd', handler: () => {
         this.currentPlayerId = null;
       }},
-      { event: 'votingStart', handler: () => this.switchScene('vote', { players: this.players, messages: this.messages }) },
+      { event: 'playerEliminated', handler: (data) => {
+        const names = data.eliminated.map(e => e.playerName).join('、');
+        const identities = data.eliminated.map(e => e.wasHuman ? '人类' : 'AI').join('、');
+        this.eliminationNotice = {
+          text: `第${data.round}轮淘汰：${names}（${identities}）`,
+          expireAt: Date.now() + 3000,
+        };
+      }},
+      { event: 'votingStart', handler: () => this.switchScene('vote', { players: this.players, messages: this.messages, mode: this.data.mode }) },
       { event: 'gameResult', handler: (data) => this.switchScene('result', data) },
     ];
     this.networkHandlers.forEach((h) => net.on(h.event, h.handler));
@@ -87,7 +97,7 @@ class GameScene {
     ctx.lineTo(this.width, 60);
     ctx.stroke();
 
-    drawText(ctx, `第 ${this.round}/5 轮`, this.width / 2, 20, {
+    drawText(ctx, `第 ${this.round}/${this.maxRounds} 轮`, this.width / 2, 20, {
       font: 'bold 16px sans-serif',
       color: '#333',
       align: 'center',
@@ -99,9 +109,24 @@ class GameScene {
       align: 'center',
     });
 
+    // Elimination notice
+    if (this.eliminationNotice) {
+      if (Date.now() > this.eliminationNotice.expireAt) {
+        this.eliminationNotice = null;
+      } else {
+        ctx.fillStyle = 'rgba(230, 67, 64, 0.9)';
+        ctx.fillRect(10, 70, this.width - 20, 36);
+        drawText(ctx, this.eliminationNotice.text, this.width / 2, 78, {
+          font: 'bold 14px sans-serif',
+          color: '#fff',
+          align: 'center',
+        });
+      }
+    }
+
     // Messages
-    const msgAreaY = 70;
-    const msgAreaH = this.height - 180;
+    const msgAreaY = this.eliminationNotice ? 114 : 70;
+    const msgAreaH = this.height - (this.eliminationNotice ? 224 : 180);
     let y = msgAreaY + 10;
 
     this.messages.forEach((msg) => {

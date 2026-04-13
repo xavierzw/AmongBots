@@ -1,96 +1,28 @@
-const { MAX_PLAYERS, TOTAL_ROUNDS, SPEAK_TIMEOUT_MS } = require('../config');
-const { getRandomTopic } = require('./topics');
-const { generateAIResponse } = require('../ai/llm');
-
 class Game {
   constructor(room) {
     this.room = room;
-    this.status = 'idle'; // idle -> speaking -> voting -> result
+    this.status = 'idle'; // idle -> speaking -> voting -> ended
     this.round = 0;
     this.topic = '';
     this.messages = []; // { senderId, senderName, content, isAI, round }
     this.speakOrder = [];
     this.currentTurnIndex = 0;
-    this.aiPlayerId = null;
-    this.aiPlayerName = '';
-    this.votes = new Map(); // voterId -> targetId
+    this.aiPlayerIds = new Set();
     this.timer = null;
   }
 
   broadcast(type, payload) {
     this.room.players.forEach((p) => {
-      p.socket.sendJSON(type, payload);
-    });
-  }
-
-  start() {
-    // Assign AI randomly
-    const aiIndex = Math.floor(Math.random() * this.room.players.length);
-    const aiPlayer = this.room.players[aiIndex];
-    this.aiPlayerId = aiPlayer.id;
-    this.aiPlayerName = aiPlayer.name;
-
-    this.topic = getRandomTopic();
-    this.round = 1;
-    this.status = 'speaking';
-    this.speakOrder = [...this.room.players].sort(() => Math.random() - 0.5);
-    this.currentTurnIndex = 0;
-    this.messages = [];
-    this.votes = new Map();
-
-    this.room.players.forEach((p) => {
-      p.socket.sendJSON('gameStart', {
-        role: p.id === this.aiPlayerId ? 'ai' : 'human',
-        topic: this.topic,
-        players: this.room.players.map((rp) => ({
-          id: rp.id,
-          name: rp.name,
-          avatar: rp.avatar,
-        })),
-      });
-    });
-
-    setTimeout(() => this.nextTurn(), 1500);
-  }
-
-  nextTurn() {
-    if (this.status !== 'speaking') return;
-
-    if (this.currentTurnIndex >= this.speakOrder.length) {
-      this.broadcast('roundEnd', { round: this.round });
-
-      if (this.round >= TOTAL_ROUNDS) {
-        setTimeout(() => this.startVoting(), 1500);
-      } else {
-        this.round++;
-        this.currentTurnIndex = 0;
-        setTimeout(() => this.nextTurn(), 1500);
+      if (p.socket && p.socket.readyState === 1) {
+        p.socket.sendJSON(type, payload);
       }
-      return;
-    }
-
-    const player = this.speakOrder[this.currentTurnIndex];
-    const deadline = Date.now() + SPEAK_TIMEOUT_MS;
-
-    this.broadcast('turnStart', {
-      playerId: player.id,
-      round: this.round,
-      deadline,
     });
+  }
 
-    if (player.id === this.aiPlayerId) {
-      this.timer = setTimeout(async () => {
-        const history = this.messages.map((m) => ({
-          role: m.senderId === this.aiPlayerId ? 'assistant' : 'user',
-          content: `${m.senderName}: ${m.content}`,
-        }));
-        const content = await generateAIResponse(this.topic, history, this.aiPlayerName);
-        this.handleSpeak(this.aiPlayerId, content);
-      }, 2000 + Math.random() * 2000);
-    } else {
-      this.timer = setTimeout(() => {
-        this.handleSpeak(player.id, '（玩家超时未发言）');
-      }, SPEAK_TIMEOUT_MS);
+  clearTimer() {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
     }
   }
 
@@ -99,20 +31,16 @@ class Game {
     const player = this.speakOrder[this.currentTurnIndex];
     if (!player || player.id !== playerId) return false;
 
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
+    this.clearTimer();
 
     const msg = {
       senderId: player.id,
       senderName: player.name,
       content: String(content).trim() || '（无言）',
-      isAI: player.id === this.aiPlayerId,
+      isAI: this.aiPlayerIds.has(player.id),
       round: this.round,
     };
     this.messages.push(msg);
-
     this.broadcast('newMessage', msg);
 
     this.currentTurnIndex++;
@@ -120,73 +48,25 @@ class Game {
     return true;
   }
 
-  startVoting() {
-    this.status = 'voting';
-    this.broadcast('votingStart', {
-      players: this.room.players.map((rp) => ({
-        id: rp.id,
-        name: rp.name,
-        avatar: rp.avatar,
-      })),
-    });
+  // Abstract methods - subclasses must implement
+  start() {
+    throw new Error('start() must be implemented by subclass');
+  }
 
-    this.timer = setTimeout(() => this.computeResult(), 30000);
+  nextTurn() {
+    throw new Error('nextTurn() must be implemented by subclass');
+  }
+
+  startVoting() {
+    throw new Error('startVoting() must be implemented by subclass');
   }
 
   handleVote(voterId, targetId) {
-    if (this.status !== 'voting') return false;
-    this.votes.set(voterId, targetId);
-
-    if (this.votes.size >= this.room.players.length) {
-      if (this.timer) {
-        clearTimeout(this.timer);
-        this.timer = null;
-      }
-      this.computeResult();
-    }
-    return true;
+    throw new Error('handleVote() must be implemented by subclass');
   }
 
   computeResult() {
-    if (this.status === 'ended') return;
-    this.status = 'ended';
-
-    const voteCounts = new Map();
-    this.votes.forEach((targetId) => {
-      voteCounts.set(targetId, (voteCounts.get(targetId) || 0) + 1);
-    });
-
-    const correctVotes = voteCounts.get(this.aiPlayerId) || 0;
-    const totalHumanPlayers = this.room.players.filter((p) => p.id !== this.aiPlayerId).length;
-    const humansWin = correctVotes >= Math.ceil(totalHumanPlayers / 2);
-
-    const result = {
-      aiPlayerId: this.aiPlayerId,
-      aiPlayerName: this.aiPlayerName,
-      votes: Array.from(this.votes.entries()).map(([voterId, targetId]) => {
-        const voter = this.room.players.find((p) => p.id === voterId);
-        const target = this.room.players.find((p) => p.id === targetId);
-        return {
-          voterId,
-          voterName: voter ? voter.name : '未知',
-          targetId,
-          targetName: target ? target.name : '未知',
-        };
-      }),
-      voteCounts: Array.from(voteCounts.entries()).map(([targetId, count]) => {
-        const target = this.room.players.find((p) => p.id === targetId);
-        return {
-          targetId,
-          targetName: target ? target.name : '未知',
-          count,
-        };
-      }),
-      humansWin,
-      messages: this.messages,
-    };
-
-    this.broadcast('gameResult', result);
-    this.room.status = 'ended';
+    throw new Error('computeResult() must be implemented by subclass');
   }
 }
 
