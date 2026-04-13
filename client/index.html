@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>谁是 AI</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #f5f5f5; }
+    canvas { display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  <script>
+    // Polyfill for browser debugging (not WeChat mini game)
+    if (typeof wx === 'undefined') {
+      window.wx = {
+        createCanvas: () => document.getElementById('gameCanvas'),
+        getSystemInfoSync: () => ({ windowWidth: window.innerWidth, windowHeight: window.innerHeight }),
+        onTouchStart: (cb) => document.addEventListener('touchstart', cb),
+        onTouchEnd: (cb) => document.addEventListener('touchend', cb),
+        onKeyboardInput: () => {},
+        onKeyboardConfirm: () => {},
+        onShow: () => {},
+        onHide: () => {},
+        showKeyboard: () => {},
+        hideKeyboard: () => {},
+        showToast: (opt) => alert(opt.title),
+        showModal: (opt) => { if (confirm(opt.content)) opt.success && opt.success({ confirm: true }); },
+        connectSocket: (opt) => {
+          const ws = new WebSocket(opt.url);
+          return {
+            onOpen: (cb) => ws.addEventListener('open', cb),
+            onClose: (cb) => ws.addEventListener('close', cb),
+            onError: (cb) => ws.addEventListener('error', cb),
+            onMessage: (cb) => ws.addEventListener('message', cb),
+            send: (obj) => ws.send(obj.data),
+          };
+        },
+      };
+    }
+  </script>
+  <script src="./game.js"></script>
+</body>
+</html>
