@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.png" alt="AmongBots Logo" width="160">
+</p>
+
 # AmongBots
 
 一款多人在线对话推理微信小游戏。每局 4 人（3 真人 + 1 AI），围绕随机话题进行 5 轮发言，最终投票找出隐藏的 AI。
